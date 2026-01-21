@@ -32,6 +32,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.logging.Level;
@@ -83,12 +85,12 @@ public class DriverServiceSessionFactory implements SessionFactory {
   private final SessionCapabilitiesMutator sessionCapabilitiesMutator;
 
   public DriverServiceSessionFactory(
-    Tracer tracer,
-    HttpClient.Factory clientFactory,
-    Duration sessionTimeout,
-    Capabilities stereotype,
-    Predicate<Capabilities> predicate,
-    DriverService.Builder<?, ?> builder) {
+      Tracer tracer,
+      HttpClient.Factory clientFactory,
+      Duration sessionTimeout,
+      Capabilities stereotype,
+      Predicate<Capabilities> predicate,
+      DriverService.Builder<?, ?> builder) {
     this.tracer = Require.nonNull("Tracer", tracer);
     this.clientFactory = Require.nonNull("HTTP client factory", clientFactory);
     this.sessionTimeout = Require.nonNull("Session timeout", sessionTimeout);
@@ -116,16 +118,15 @@ public class DriverServiceSessionFactory implements SessionFactory {
 
     if (!test(sessionRequest.getDesiredCapabilities())) {
       return Either.left(
-        new SessionNotCreatedException(
-          "New session request capabilities do not " + "match the stereotype."));
+          new SessionNotCreatedException(
+              "New session request capabilities do not " + "match the stereotype."));
     }
 
     Span span = tracer.getCurrentContext().createSpan("driver_service_factory.apply");
     AttributeMap attributeMap = tracer.createAttributeMap();
     try {
 
-      Capabilities capabilities =
-        sessionCapabilitiesMutator.apply(sessionRequest.getDesiredCapabilities());
+      Capabilities capabilities = sessionCapabilitiesMutator.apply(sessionRequest.getDesiredCapabilities());
 
       CAPABILITIES.accept(span, capabilities);
       CAPABILITIES_EVENT.accept(attributeMap, capabilities);
@@ -152,7 +153,7 @@ public class DriverServiceSessionFactory implements SessionFactory {
       @SuppressWarnings("unchecked")
       Map<String, Object> proxyConfig = (Map<String, Object>) capabilities.asMap().get("se:proxyConfig");
 
-      // 提取代理配置，如果为空则默认为空字符串（直连模式）
+      // 提取代理配置
       String proxyIp = "";
       String proxyPort = "";
       String proxyUsername = "";
@@ -166,30 +167,39 @@ public class DriverServiceSessionFactory implements SessionFactory {
       }
 
       // 记录日志：如果是直连模式(ip为空)，明确打印
-      String configLog = (proxyIp != null && !proxyIp.isEmpty()) 
-          ? (proxyUsername != null ? proxyUsername + "@" : "") + proxyIp + ":" + proxyPort 
+      String configLog = (proxyIp != null && !proxyIp.isEmpty())
+          ? (proxyUsername != null ? proxyUsername + "@" : "") + proxyIp + ":" + proxyPort
           : "Direct Connection (No Proxy)";
-          
-      LOG.info("[TinyproxySessionFactory] 代理配置检查 (Config " + (proxyConfig != null ? "Present" : "Null/Reset") + "): " + configLog);
 
-      try {
-        // 无论是否有代理配置，都调用sidecar脚本以确保状态一致性（有配置则切换，无配置则重置为直连）
-        long startTime = System.currentTimeMillis();
-        boolean switchSuccess = invokeSidecarProxySwitch(proxyIp, proxyPort, proxyUsername, proxyPassword);
-        long duration = System.currentTimeMillis() - startTime;
+      LOG.info("[TinyproxySessionFactory] 代理配置检查 (Config " + (proxyConfig != null ? "Present" : "Null/Reset") + "): "
+          + configLog);
 
-        if (switchSuccess) {
-          LOG.info("[TinyproxySessionFactory] 代理配置生效: " + configLog + " (耗时: " + duration + "ms)");
-        } else {
-          LOG.warning("[TinyproxySessionFactory] 代理配置切换失败，使用原有配置 (耗时: " + duration + "ms)");
+      // [Parallelization] 异步并行执行切换
+      final String pIp = proxyIp;
+      final String pPort = proxyPort;
+      final String pUser = proxyUsername;
+      final String pPass = proxyPassword;
+
+      CompletableFuture<Boolean> proxySwitchFuture = CompletableFuture.supplyAsync(() -> {
+        try {
+          long startSwitch = System.currentTimeMillis();
+          boolean success = invokeSidecarProxySwitch(pIp, pPort, pUser, pPass);
+          long endSwitch = System.currentTimeMillis();
+          if (success) {
+            LOG.info("[TinyproxySessionFactory] 代理异步切换成功: " + configLog + " (耗时: " + (endSwitch - startSwitch) + "ms)");
+          } else {
+            LOG.warning("[TinyproxySessionFactory] 代理异步切换失败，使用旧配置");
+          }
+          return success;
+        } catch (Exception e) {
+          LOG.warning("[TinyproxySessionFactory] 代理切换异常: " + e.getMessage());
+          return false;
         }
+      });
 
-      } catch (Exception e) {
-        LOG.warning("[TinyproxySessionFactory] 代理切换异常: " + e.getMessage());
-        // 不抛出异常，继续创建会话，使用原有代理配置
-      }
+      LOG.info("[TinyproxySessionFactory] 已触发异步代理切换任务...");
 
-      //connect adb
+      // connect adb
       String adbDeviceId = (String) capabilities.asMap().get("se:adbDeviceId");
       String userId = (String) capabilities.asMap().get("se:userId");
 
@@ -202,9 +212,8 @@ public class DriverServiceSessionFactory implements SessionFactory {
 
           // 写入新的 userId
           java.nio.file.Files.write(
-            java.nio.file.Paths.get(userIdFilePath),
-            userId.getBytes(java.nio.charset.StandardCharsets.UTF_8)
-          );
+              java.nio.file.Paths.get(userIdFilePath),
+              userId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
           LOG.info("[AdbSessionFactory] userId saved to file: " + userId + " -> " + userIdFilePath);
 
@@ -237,16 +246,18 @@ public class DriverServiceSessionFactory implements SessionFactory {
         LOG.info("[AdbSessionFactory] adbDeviceId is null or empty, skipping adb connect.");
       }
 
-
       HttpClient client = null;
       try {
+        long startService = System.currentTimeMillis();
+        LOG.info("[DriverServiceSessionFactory] Starting driver service (Chrome startup)...");
         service.start();
+        long endService = System.currentTimeMillis();
+        LOG.info("[DriverServiceSessionFactory] Driver service started (Time: " + (endService - startService) + "ms)");
 
         URL serviceURL = service.getUrl();
         attributeMap.put(AttributeKey.DRIVER_URL.getKey(), serviceURL.toString());
 
-        ClientConfig clientConfig =
-          ClientConfig.defaultConfig().readTimeout(sessionTimeout).baseUrl(serviceURL);
+        ClientConfig clientConfig = ClientConfig.defaultConfig().readTimeout(sessionTimeout).baseUrl(serviceURL);
         client = clientFactory.createClient(clientConfig);
 
         Command command = new Command(null, DriverCommand.NEW_SESSION(capabilities));
@@ -255,8 +266,7 @@ public class DriverServiceSessionFactory implements SessionFactory {
 
         Set<Dialect> downstreamDialects = sessionRequest.getDownstreamDialects();
         Dialect upstream = result.getDialect();
-        Dialect downstream =
-          downstreamDialects.contains(result.getDialect())
+        Dialect downstream = downstreamDialects.contains(result.getDialect())
             ? result.getDialect()
             : downstreamDialects.iterator().next();
 
@@ -272,8 +282,8 @@ public class DriverServiceSessionFactory implements SessionFactory {
         }
 
         if (caps.getBrowserVersion().isEmpty()
-          && browserVersion.isPresent()
-          && !browserVersion.get().isEmpty()) {
+            && browserVersion.isPresent()
+            && !browserVersion.get().isEmpty()) {
           caps = setInitialCapabilityValue(caps, "browserVersion", browserVersion.get());
         }
 
@@ -281,30 +291,44 @@ public class DriverServiceSessionFactory implements SessionFactory {
         caps = readVncEndpoint(capabilities, caps);
         caps = readPrefixedCaps(capabilities, caps);
 
+        // [Parallelization] 等待代理切换完成 (如果还没完成)
+        // 此时 Driver 已经启动完毕 (service.start() done)
+        try {
+          // 设置超时，避免因为脚本卡死影响会话创建
+          // 正常情况下脚本现在是毫秒级，且早已在 service.start() 期间完成
+          long startWait = System.currentTimeMillis();
+          LOG.info("[TinyproxySessionFactory] Checking proxy switch status...");
+          proxySwitchFuture.get(5, TimeUnit.SECONDS);
+          long endWait = System.currentTimeMillis();
+          LOG.info("[TinyproxySessionFactory] Proxy switch synced (Wait time: " + (endWait - startWait) + "ms)");
+        } catch (Exception e) {
+          LOG.warning("[TinyproxySessionFactory] 等待代理切换结果时发生异常/超时: " + e.getMessage());
+          // 继续，不中断会话
+        }
+
         span.addEvent("Driver service created session", attributeMap);
         return Either.right(
-          new DefaultActiveSession(
-            tracer,
-            client,
-            new SessionId(response.getSessionId()),
-            service.getUrl(),
-            downstream,
-            upstream,
-            stereotype,
-            caps,
-            Instant.now()) {
-            @Override
-            public void stop() {
-              super.stop();
-              service.stop();
-            }
-          });
+            new DefaultActiveSession(
+                tracer,
+                client,
+                new SessionId(response.getSessionId()),
+                service.getUrl(),
+                downstream,
+                upstream,
+                stereotype,
+                caps,
+                Instant.now()) {
+              @Override
+              public void stop() {
+                super.stop();
+                service.stop();
+              }
+            });
       } catch (Exception e) {
         span.setAttribute(AttributeKey.ERROR.getKey(), true);
         span.setStatus(Status.CANCELLED);
         EXCEPTION.accept(attributeMap, e);
-        String errorMessage =
-          "Error while creating session with the driver service. "
+        String errorMessage = "Error while creating session with the driver service. "
             + "Stopping driver service: "
             + e.getMessage();
         LOG.log(Level.WARNING, errorMessage, e);
@@ -320,8 +344,7 @@ public class DriverServiceSessionFactory implements SessionFactory {
       span.setAttribute(AttributeKey.ERROR.getKey(), true);
       span.setStatus(Status.CANCELLED);
       EXCEPTION.accept(attributeMap, e);
-      String errorMessage =
-        "Error while creating session with the driver service. " + e.getMessage();
+      String errorMessage = "Error while creating session with the driver service. " + e.getMessage();
       LOG.log(Level.WARNING, errorMessage, e);
 
       attributeMap.put(AttributeKey.EXCEPTION_MESSAGE.getKey(), errorMessage);
@@ -344,18 +367,14 @@ public class DriverServiceSessionFactory implements SessionFactory {
       }
     }
 
-    Function<Capabilities, Optional<DevToolsInfo>> chrome =
-      c ->
-        CdpEndpointFinder.getReportedUri("goog:chromeOptions", c)
-          .map(uri -> new DevToolsInfo(uri, c.getBrowserVersion()));
+    Function<Capabilities, Optional<DevToolsInfo>> chrome = c -> CdpEndpointFinder
+        .getReportedUri("goog:chromeOptions", c)
+        .map(uri -> new DevToolsInfo(uri, c.getBrowserVersion()));
 
-    Function<Capabilities, Optional<DevToolsInfo>> edge =
-      c ->
-        CdpEndpointFinder.getReportedUri("ms:edgeOptions", c)
-          .map(uri -> new DevToolsInfo(uri, c.getBrowserVersion()));
+    Function<Capabilities, Optional<DevToolsInfo>> edge = c -> CdpEndpointFinder.getReportedUri("ms:edgeOptions", c)
+        .map(uri -> new DevToolsInfo(uri, c.getBrowserVersion()));
 
-    Optional<DevToolsInfo> maybeInfo =
-      Stream.of(chrome, edge)
+    Optional<DevToolsInfo> maybeInfo = Stream.of(chrome, edge)
         .map(finder -> finder.apply(caps))
         .filter(Optional::isPresent)
         .map(Optional::get)
@@ -364,8 +383,8 @@ public class DriverServiceSessionFactory implements SessionFactory {
     if (maybeInfo.isPresent()) {
       DevToolsInfo info = maybeInfo.get();
       return new PersistentCapabilities(caps)
-        .setCapability("se:cdp", info.cdpEndpoint)
-        .setCapability("se:cdpVersion", info.version);
+          .setCapability("se:cdp", info.cdpEndpoint)
+          .setCapability("se:cdpVersion", info.version);
     }
     return caps;
   }
@@ -378,8 +397,7 @@ public class DriverServiceSessionFactory implements SessionFactory {
     if (Boolean.parseBoolean(seVncEnabled) && !vncLocalAddressSet) {
       String seNoVncPort = String.valueOf(requestedCaps.getCapability(seNoVncPortCap));
       String vncLocalAddress = String.format("ws://%s:%s", getHost(), seNoVncPort);
-      returnedCaps =
-        new PersistentCapabilities(returnedCaps)
+      returnedCaps = new PersistentCapabilities(returnedCaps)
           .setCapability("se:vncLocalAddress", vncLocalAddress)
           .setCapability(seVncEnabledCap, true);
     }
@@ -404,8 +422,10 @@ public class DriverServiceSessionFactory implements SessionFactory {
     return returnPrefixedCaps;
   }
 
-  // We remove a capability before sending the caps to the driver because some drivers will
-  // reject session requests when they cannot parse the specific capabilities (like platform or
+  // We remove a capability before sending the caps to the driver because some
+  // drivers will
+  // reject session requests when they cannot parse the specific capabilities
+  // (like platform or
   // browser version).
   private Capabilities removeCapability(Capabilities caps, String capability) {
     MutableCapabilities removableCaps = new MutableCapabilities(new HashMap<>(caps.asMap()));
@@ -426,14 +446,13 @@ public class DriverServiceSessionFactory implements SessionFactory {
   }
 
   private Capabilities setBrowserBinary(Capabilities options, String browserPath) {
-    List<String> vendorOptionsCapabilities =
-      Arrays.asList("moz:firefoxOptions", "goog:chromeOptions", "ms:edgeOptions");
+    List<String> vendorOptionsCapabilities = Arrays.asList("moz:firefoxOptions", "goog:chromeOptions",
+        "ms:edgeOptions");
     for (String vendorOptionsCapability : vendorOptionsCapabilities) {
       if (options.asMap().containsKey(vendorOptionsCapability)) {
         try {
           @SuppressWarnings("unchecked")
-          Map<String, Object> vendorOptions =
-            (Map<String, Object>) options.getCapability(vendorOptionsCapability);
+          Map<String, Object> vendorOptions = (Map<String, Object>) options.getCapability(vendorOptionsCapability);
           vendorOptions.put("binary", browserPath);
           MutableCapabilities toReturn = new MutableCapabilities(options);
           toReturn.setCapability(vendorOptionsCapability, vendorOptions);
@@ -441,10 +460,10 @@ public class DriverServiceSessionFactory implements SessionFactory {
           return new PersistentCapabilities(toReturn);
         } catch (Exception e) {
           LOG.log(
-            Level.WARNING,
-            String.format(
-              "Exception while setting the browser binary path. Options: %s", options),
-            e);
+              Level.WARNING,
+              String.format(
+                  "Exception while setting the browser binary path. Options: %s", options),
+              e);
         }
       }
     }
@@ -454,7 +473,8 @@ public class DriverServiceSessionFactory implements SessionFactory {
   private String execAndLog(String cmd) throws IOException, InterruptedException {
     Process process = Runtime.getRuntime().exec(cmd);
     StringBuilder output = new StringBuilder();
-    try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()))) {
+    try (java.io.BufferedReader reader = new java.io.BufferedReader(
+        new java.io.InputStreamReader(process.getInputStream()))) {
       String line;
       while ((line = reader.readLine()) != null) {
         output.append(line).append("\n");
@@ -469,13 +489,14 @@ public class DriverServiceSessionFactory implements SessionFactory {
    * 调用sidecar脚本进行代理切换
    * Java层只负责参数传递和结果监控，配置生成由脚本处理
    *
-   * @param proxyIp 代理IP地址
-   * @param proxyPort 代理端口
+   * @param proxyIp       代理IP地址
+   * @param proxyPort     代理端口
    * @param proxyUsername 代理用户名（可为null）
    * @param proxyPassword 代理密码（可为null）
    * @return true if successful, false otherwise
    */
-  private boolean invokeSidecarProxySwitch(String proxyIp, String proxyPort, String proxyUsername, String proxyPassword) {
+  private boolean invokeSidecarProxySwitch(String proxyIp, String proxyPort, String proxyUsername,
+      String proxyPassword) {
     final String SWITCH_SCRIPT = "/shared/scripts/switch-proxy.sh";
     final String RESULT_FILE = "/shared/config/switch-result.txt";
 
@@ -494,7 +515,7 @@ public class DriverServiceSessionFactory implements SessionFactory {
       // 3. 读取脚本输出
       StringBuilder output = new StringBuilder();
       try (java.io.BufferedReader reader = new java.io.BufferedReader(
-        new java.io.InputStreamReader(process.getInputStream()))) {
+          new java.io.InputStreamReader(process.getInputStream()))) {
         String line;
         while ((line = reader.readLine()) != null) {
           output.append(line).append("\n");
@@ -532,9 +553,10 @@ public class DriverServiceSessionFactory implements SessionFactory {
   /**
    * 构建脚本调用命令 - 使用sudo权限解决文件权限问题
    */
-  private String[] buildSwitchCommand(String scriptPath, String proxyIp, String proxyPort, String proxyUsername, String proxyPassword) {
+  private String[] buildSwitchCommand(String scriptPath, String proxyIp, String proxyPort, String proxyUsername,
+      String proxyPassword) {
     java.util.List<String> command = new java.util.ArrayList<>();
-    command.add("sudo");  // 添加sudo权限
+    command.add("sudo"); // 添加sudo权限
     command.add("/bin/sh");
     command.add(scriptPath);
     // 如果 ip/port 为 null，转为空字符串，脚本端会识别为直连模式
