@@ -17,6 +17,7 @@
 // under the License.
 // </copyright>
 
+using OpenQA.Selenium.BiDi.Json.Converters;
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
@@ -29,22 +30,18 @@ public sealed partial class NetworkModule : Module
 {
     private NetworkJsonSerializerContext _jsonContext = null!;
 
-    public async Task<Collector> AddDataCollectorAsync(IEnumerable<DataType> DataTypes, int MaxEncodedDataSize, AddDataCollectorOptions? options = null)
+    public async Task<AddDataCollectorResult> AddDataCollectorAsync(IEnumerable<DataType> dataTypes, int maxEncodedDataSize, AddDataCollectorOptions? options = null)
     {
-        var @params = new AddDataCollectorParameters(DataTypes, MaxEncodedDataSize, options?.CollectorType, options?.Contexts, options?.UserContexts);
+        var @params = new AddDataCollectorParameters(dataTypes, maxEncodedDataSize, options?.CollectorType, options?.Contexts, options?.UserContexts);
 
-        var result = await Broker.ExecuteCommandAsync(new AddDataCollectorCommand(@params), options, _jsonContext.AddDataCollectorCommand, _jsonContext.AddDataCollectorResult).ConfigureAwait(false);
-
-        return result.Collector;
+        return await Broker.ExecuteCommandAsync(new AddDataCollectorCommand(@params), options, _jsonContext.AddDataCollectorCommand, _jsonContext.AddDataCollectorResult).ConfigureAwait(false);
     }
 
-    public async Task<Intercept> AddInterceptAsync(IEnumerable<InterceptPhase> phases, AddInterceptOptions? options = null)
+    public async Task<AddInterceptResult> AddInterceptAsync(IEnumerable<InterceptPhase> phases, AddInterceptOptions? options = null)
     {
         var @params = new AddInterceptParameters(phases, options?.Contexts, options?.UrlPatterns);
 
-        var result = await Broker.ExecuteCommandAsync(new AddInterceptCommand(@params), options, _jsonContext.AddInterceptCommand, _jsonContext.AddInterceptResult).ConfigureAwait(false);
-
-        return result.Intercept;
+        return await Broker.ExecuteCommandAsync(new AddInterceptCommand(@params), options, _jsonContext.AddInterceptCommand, _jsonContext.AddInterceptResult).ConfigureAwait(false);
     }
 
     public async Task<RemoveDataCollectorResult> RemoveDataCollectorAsync(Collector collector, RemoveDataCollectorOptions? options = null)
@@ -177,9 +174,14 @@ public sealed partial class NetworkModule : Module
         return await Broker.SubscribeAsync("network.authRequired", handler, options, _jsonContext.AuthRequiredEventArgs).ConfigureAwait(false);
     }
 
-    protected override void Initialize(JsonSerializerOptions options)
+    protected override void Initialize(JsonSerializerOptions jsonSerializerOptions)
     {
-        _jsonContext = new NetworkJsonSerializerContext(options);
+        jsonSerializerOptions.Converters.Add(new BrowsingContextConverter(BiDi));
+        jsonSerializerOptions.Converters.Add(new CollectorConverter(BiDi));
+        jsonSerializerOptions.Converters.Add(new InterceptConverter(BiDi));
+        jsonSerializerOptions.Converters.Add(new BrowserUserContextConverter(BiDi));
+
+        _jsonContext = new NetworkJsonSerializerContext(jsonSerializerOptions);
     }
 }
 
@@ -213,4 +215,5 @@ public sealed partial class NetworkModule : Module
 [JsonSerializable(typeof(ResponseCompletedEventArgs))]
 [JsonSerializable(typeof(FetchErrorEventArgs))]
 [JsonSerializable(typeof(AuthRequiredEventArgs))]
+
 internal partial class NetworkJsonSerializerContext : JsonSerializerContext;

@@ -1,5 +1,49 @@
+v4.40.0
+======
+* [bidi] Support SetScreenSettingsOverrideAsync method in Emulation module (#16704)
+* [bidi] Added missing Script.RemoteReference LocaclValue type (#16717)
+* Standardize `IEquatable<T>` implementations across types overriding Equals (#16665)
+* Fix nullability warnings in `WebDriver` (#16662)
+* Hide driver service window by default (#16782)
+* [bidi] Fix context aware event handlers (#16787)
+* [bidi] Properly return shared buffer when disposing websocket (#16804)
+* use SE_DEBUG to enable debugging (#16816)
+* [bidi] Context aware network collector (#16866)
+* [bidi] Rent and return buffer to shared pool per remote message (#16838)
+* [bidi] Allow consumer to combine input actions via identifier (#16885)
+* [bidi] Expose New session command (#16907)
+* [bidi] FileDialogOpened event in Input module (#16934)
+* [bidi] Expose Input module in root BiDi class (#16940)
+
+v4.39.0
+======
+* Add CDP for Chrome 143 and remove 140
+* [build] Upgrade rules_dotnet to 0.20.5 (#16592)
+* [bidi] Simplify namespace for communications (#16602)
+* Generate atoms statically (#16608)
+* Add syntax highlighting for JavaScript string methods (#16616)
+* Unwrap element wrapper recursively (#15362)
+* Simplify nuget package reference in Bazel (#16630)
+* [bidi] Fix events subscription possibilities (#16603)
+* Pack `net462` target framework (#16564)
+* [bidi] Possibility to reset viewport (#16601)
+* Implement third-party Permissions module (#16414)
+* [bidi] JsonSerializerContext instance per module (#16649)
+* [bidi] Immediately start to listen to incoming remote messages (#16651)
+* [bidi] Dedicated json context for all modules (#16652)
+* Move internal compiler services to Properties (#16653)
+* [bidi] Rent buffer for receiving bytes in WebSocket (#16650)
+* [bidi] Ignore non-serializable extension properties in BrowsingContext (#16654)
+* [bidi] Cache modules in the root BiDi (#16655)
+* Allow inspecting source generated files (#16656)
+* Annotate JavaScript strings within BiDi (#16657)
+* Fix nullability annotations on `NodeRemoteValue` (#16661)
+* Replace `Lazy<T>` with `??=` in `BrowsingContext` (#16664)
+* [bidi] Avoid BiDi type in EventArgs ctor for unnecessary metadata generation (#16667)
+
 v4.38.0
 ======
+* Add CDP for Chrome 142 and remove 139
 * [bidi] Avoid using JsonInclude attribute to include optional property for DTO (#16413)
 * update devtools versions
 

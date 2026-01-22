@@ -38,6 +38,8 @@ public sealed class BiDi : IAsyncDisposable
         Broker = new Broker(this, uri);
     }
 
+    private Broker Broker { get; }
+
     internal Session.SessionModule SessionModule => AsModule<Session.SessionModule>();
 
     public BrowsingContext.BrowsingContextModule BrowsingContext => AsModule<BrowsingContext.BrowsingContextModule>();
@@ -46,7 +48,7 @@ public sealed class BiDi : IAsyncDisposable
 
     public Network.NetworkModule Network => AsModule<Network.NetworkModule>();
 
-    internal Input.InputModule InputModule => AsModule<Input.InputModule>();
+    public Input.InputModule Input => AsModule<Input.InputModule>();
 
     public Script.ScriptModule Script => AsModule<Script.ScriptModule>();
 
@@ -58,11 +60,6 @@ public sealed class BiDi : IAsyncDisposable
 
     public Emulation.EmulationModule Emulation => AsModule<Emulation.EmulationModule>();
 
-    public Task<Session.StatusResult> StatusAsync()
-    {
-        return SessionModule.StatusAsync();
-    }
-
     public static async Task<BiDi> ConnectAsync(string url, BiDiOptions? options = null)
     {
         var bidi = new BiDi(url);
@@ -70,6 +67,16 @@ public sealed class BiDi : IAsyncDisposable
         await bidi.Broker.ConnectAsync(CancellationToken.None).ConfigureAwait(false);
 
         return bidi;
+    }
+
+    public Task<Session.StatusResult> StatusAsync(Session.StatusOptions? options = null)
+    {
+        return SessionModule.StatusAsync(options);
+    }
+
+    public Task<Session.NewResult> NewAsync(Session.CapabilitiesRequest capabilities, Session.NewOptions? options = null)
+    {
+        return SessionModule.NewAsync(capabilities, options);
     }
 
     public Task EndAsync(Session.EndOptions? options = null)
@@ -85,34 +92,19 @@ public sealed class BiDi : IAsyncDisposable
 
     public T AsModule<T>() where T : Module, new()
     {
-        return (T)_modules.GetOrAdd(typeof(T), _ => Module.Create<T>(this, Broker, GetJsonOptions()));
+        return (T)_modules.GetOrAdd(typeof(T), _ => Module.Create<T>(this, Broker, CreateDefaultJsonOptions()));
     }
 
-    private Broker Broker { get; }
-
-    private JsonSerializerOptions GetJsonOptions()
+    private static JsonSerializerOptions CreateDefaultJsonOptions()
     {
         return new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-
-            // BiDi returns special numbers such as "NaN" as strings
-            // Additionally, -0 is returned as a string "-0"
-            NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals | JsonNumberHandling.AllowReadingFromString,
             Converters =
             {
-                new BrowsingContextConverter(this),
-                new BrowserUserContextConverter(this),
-                new CollectorConverter(this),
-                new InterceptConverter(this),
-                new HandleConverter(this),
-                new InternalIdConverter(this),
-                new PreloadScriptConverter(this),
-                new RealmConverter(this),
                 new DateTimeOffsetConverter(),
-                new WebExtensionConverter(this),
             }
         };
     }

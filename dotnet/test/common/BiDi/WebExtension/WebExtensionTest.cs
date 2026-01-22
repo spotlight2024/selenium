@@ -25,9 +25,9 @@ namespace OpenQA.Selenium.BiDi.WebExtension;
 
 [IgnoreBrowser(Selenium.Browser.Chrome, ChromiumIgnoreReason)]
 [IgnoreBrowser(Selenium.Browser.Edge, ChromiumIgnoreReason)]
-class WebExtensionTest : BiDiTestFixture
+internal class WebExtensionTest : BiDiTestFixture
 {
-    const string ChromiumIgnoreReason = """
+    private const string ChromiumIgnoreReason = """
         The following test suite wants to set driver arguments via Options, but it breaks CDP/DevTools tests.
         The desired arguments (for Chromium only?):
         --enable-unsafe-extension-debugging
@@ -81,14 +81,23 @@ class WebExtensionTest : BiDiTestFixture
 
         var result = await bidi.WebExtension.InstallAsync(new ExtensionPath(path));
 
-        await result.Extension.UninstallAsync();
+        await bidi.WebExtension.UninstallAsync(result.Extension);
     }
 
     private static string LocateRelativePath(string path)
     {
         try
         {
-            return Bazel.Runfiles.Create().Rlocation($"_main/{path}");
+            var runfiles = Bazel.Runfiles.Create();
+            string resolved = runfiles.Rlocation($"_main/{path}");
+            if (!string.IsNullOrEmpty(resolved))
+            {
+                return resolved;
+            }
+
+            // For directories, locate a file inside and get parent (runfiles manifest only lists files)
+            string manifestPath = runfiles.Rlocation($"_main/{path}/manifest.json");
+            return Path.GetDirectoryName(manifestPath) ?? Path.GetFullPath(path);
         }
         catch (FileNotFoundException)
         {

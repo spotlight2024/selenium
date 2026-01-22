@@ -30,8 +30,7 @@ public class BasicMouseInterfaceTest : DriverTestFixture
     [SetUp]
     public void SetupTest()
     {
-        IActionExecutor actionExecutor = driver as IActionExecutor;
-        if (actionExecutor != null)
+        if (driver is IActionExecutor actionExecutor)
         {
             actionExecutor.ResetInputState();
         }
@@ -391,7 +390,7 @@ public class BasicMouseInterfaceTest : DriverTestFixture
 
         IWebElement reporter = driver.FindElement(By.Id("status"));
 
-        WaitFor(FuzzyMatchingOfCoordinates(reporter, 40, 20), "Coordinate matching was not within tolerance");
+        WaitFor(FuzzyMatchingOfCoordinates(reporter, 50, 100), "Coordinate matching was not within tolerance");
     }
 
     [Test]

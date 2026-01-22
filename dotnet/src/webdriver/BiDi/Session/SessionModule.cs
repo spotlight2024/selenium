@@ -17,6 +17,7 @@
 // under the License.
 // </copyright>
 
+using OpenQA.Selenium.BiDi.Json.Converters;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -47,9 +48,9 @@ internal sealed class SessionModule : Module
         return await Broker.ExecuteCommandAsync(new UnsubscribeByIdCommand(@params), options, _jsonContext.UnsubscribeByIdCommand, _jsonContext.UnsubscribeResult).ConfigureAwait(false);
     }
 
-    public async Task<NewResult> NewAsync(CapabilitiesRequest capabilitiesRequest, NewOptions? options = null)
+    public async Task<NewResult> NewAsync(CapabilitiesRequest capabilities, NewOptions? options = null)
     {
-        var @params = new NewParameters(capabilitiesRequest);
+        var @params = new NewParameters(capabilities);
 
         return await Broker.ExecuteCommandAsync(new NewCommand(@params), options, _jsonContext.NewCommand, _jsonContext.NewResult).ConfigureAwait(false);
     }
@@ -59,9 +60,12 @@ internal sealed class SessionModule : Module
         return await Broker.ExecuteCommandAsync(new EndCommand(), options, _jsonContext.EndCommand, _jsonContext.EndResult).ConfigureAwait(false);
     }
 
-    protected override void Initialize(JsonSerializerOptions options)
+    protected override void Initialize(JsonSerializerOptions jsonSerializerOptions)
     {
-        _jsonContext = new SessionJsonSerializerContext(options);
+        jsonSerializerOptions.Converters.Add(new BrowsingContextConverter(BiDi));
+        jsonSerializerOptions.Converters.Add(new BrowserUserContextConverter(BiDi));
+
+        _jsonContext = new SessionJsonSerializerContext(jsonSerializerOptions);
     }
 }
 
@@ -75,4 +79,5 @@ internal sealed class SessionModule : Module
 [JsonSerializable(typeof(SubscribeResult))]
 [JsonSerializable(typeof(UnsubscribeByIdCommand))]
 [JsonSerializable(typeof(UnsubscribeResult))]
+
 internal partial class SessionJsonSerializerContext : JsonSerializerContext;

@@ -24,16 +24,23 @@ using System.Threading.Tasks;
 
 namespace OpenQA.Selenium.BiDi.Network;
 
-class NetworkTest : BiDiTestFixture
+internal class NetworkTest : BiDiTestFixture
 {
     [Test]
     public async Task CanAddDataCollector()
     {
         // Firefox doesn't like int.MaxValue as max encoded data size
         // invalid argument: Expected "maxEncodedDataSize" to be less than the max total data size available (200000000), got 2147483647
-        await using var collector = await bidi.Network.AddDataCollectorAsync([DataType.Response], 200000000);
+        var addDataCollectorResult = await bidi.Network.AddDataCollectorAsync([DataType.Response], 200000000);
 
-        Assert.That(collector, Is.Not.Null);
+        Assert.That(addDataCollectorResult, Is.Not.Null);
+        Assert.That(addDataCollectorResult.Collector, Is.Not.Null);
+
+        // or context aware
+        addDataCollectorResult = await context.Network.AddDataCollectorAsync([DataType.Response], 200000000);
+
+        Assert.That(addDataCollectorResult, Is.Not.Null);
+        Assert.That(addDataCollectorResult.Collector, Is.Not.Null);
     }
 
     [Test]
@@ -226,7 +233,7 @@ class NetworkTest : BiDiTestFixture
     {
         // Firefox doesn't like int.MaxValue as max encoded data size
         // invalid argument: Expected "maxEncodedDataSize" to be less than the max total data size available (200000000), got 2147483647
-        await using var collector = await bidi.Network.AddDataCollectorAsync([DataType.Response], 200000000);
+        var collector = await bidi.Network.AddDataCollectorAsync([DataType.Response], 200000000);
 
         TaskCompletionSource<string> responseBodyCompletionSource = new();
 

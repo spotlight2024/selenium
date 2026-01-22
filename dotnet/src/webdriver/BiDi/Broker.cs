@@ -21,7 +21,6 @@ using OpenQA.Selenium.Internal.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Threading;
@@ -113,16 +112,7 @@ public sealed class Broker : IAsyncDisposable
 
                             args.BiDi = _bidi;
 
-                            // handle browsing context subscriber
-                            if (handler.Contexts is not null && args is BrowsingContextEventArgs browsingContextEventArgs && handler.Contexts.Contains(browsingContextEventArgs.Context))
-                            {
-                                await handler.InvokeAsync(args).ConfigureAwait(false);
-                            }
-                            // handle only session subscriber
-                            else if (handler.Contexts is null)
-                            {
-                                await handler.InvokeAsync(args).ConfigureAwait(false);
-                            }
+                            await handler.InvokeAsync(args).ConfigureAwait(false);
                         }
                     }
                 }
@@ -155,23 +145,21 @@ public sealed class Broker : IAsyncDisposable
         return (TResult)await tcs.Task.ConfigureAwait(false);
     }
 
-    public async Task<Subscription> SubscribeAsync<TEventArgs>(string eventName, Action<TEventArgs> action, SubscriptionOptions? options, JsonTypeInfo<TEventArgs> jsonTypeInfo)
+    public Task<Subscription> SubscribeAsync<TEventArgs>(string eventName, Action<TEventArgs> action, SubscriptionOptions? options, JsonTypeInfo<TEventArgs> jsonTypeInfo)
         where TEventArgs : EventArgs
     {
-        _eventTypesMap[eventName] = jsonTypeInfo;
-
-        var handlers = _eventHandlers.GetOrAdd(eventName, (a) => []);
-
-        var subscribeResult = await _bidi.SessionModule.SubscribeAsync([eventName], new() { Contexts = options?.Contexts, UserContexts = options?.UserContexts }).ConfigureAwait(false);
-
-        var eventHandler = new SyncEventHandler<TEventArgs>(eventName, action, options?.Contexts);
-
-        handlers.Add(eventHandler);
-
-        return new Subscription(subscribeResult.Subscription, this, eventHandler);
+        var eventHandler = new SyncEventHandler<TEventArgs>(eventName, action);
+        return SubscribeAsync(eventName, eventHandler, options, jsonTypeInfo);
     }
 
-    public async Task<Subscription> SubscribeAsync<TEventArgs>(string eventName, Func<TEventArgs, Task> func, SubscriptionOptions? options, JsonTypeInfo<TEventArgs> jsonTypeInfo)
+    public Task<Subscription> SubscribeAsync<TEventArgs>(string eventName, Func<TEventArgs, Task> func, SubscriptionOptions? options, JsonTypeInfo<TEventArgs> jsonTypeInfo)
+        where TEventArgs : EventArgs
+    {
+        var eventHandler = new AsyncEventHandler<TEventArgs>(eventName, func);
+        return SubscribeAsync(eventName, eventHandler, options, jsonTypeInfo);
+    }
+
+    private async Task<Subscription> SubscribeAsync<TEventArgs>(string eventName, EventHandler eventHandler, SubscriptionOptions? options, JsonTypeInfo<TEventArgs> jsonTypeInfo)
         where TEventArgs : EventArgs
     {
         _eventTypesMap[eventName] = jsonTypeInfo;
@@ -179,8 +167,6 @@ public sealed class Broker : IAsyncDisposable
         var handlers = _eventHandlers.GetOrAdd(eventName, (a) => []);
 
         var subscribeResult = await _bidi.SessionModule.SubscribeAsync([eventName], new() { Contexts = options?.Contexts, UserContexts = options?.UserContexts }).ConfigureAwait(false);
-
-        var eventHandler = new AsyncEventHandler<TEventArgs>(eventName, func, options?.Contexts);
 
         handlers.Add(eventHandler);
 
@@ -303,6 +289,8 @@ public sealed class Broker : IAsyncDisposable
                 if (_eventTypesMap.TryGetValue(method, out var eventInfo))
                 {
                     var eventArgs = (EventArgs)JsonSerializer.Deserialize(ref paramsReader, eventInfo)!;
+
+                    eventArgs.BiDi = _bidi;
 
                     var messageEvent = (method, eventArgs);
                     _pendingEvents.Add(messageEvent);
