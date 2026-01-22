@@ -446,7 +446,7 @@ public class DriverServiceSessionFactory implements SessionFactory {
 
   private Capabilities setBrowserBinary(Capabilities options, String browserPath) {
     List<String> vendorOptionsCapabilities =
-        Arrays.asList("moz:firefoxOptions", "goog:chromeOptions", "ms:edgeOptions");
+        List.of("moz:firefoxOptions", "goog:chromeOptions", "ms:edgeOptions");
     for (String vendorOptionsCapability : vendorOptionsCapabilities) {
       if (options.asMap().containsKey(vendorOptionsCapability)) {
         try {
