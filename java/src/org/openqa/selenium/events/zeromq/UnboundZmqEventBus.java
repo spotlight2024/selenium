@@ -89,51 +89,45 @@ class UnboundZmqEventBus implements EventBus {
     }
     this.encodedSecret = builder.toString();
 
-    this.socketPollingExecutor =
-        Executors.newSingleThreadExecutor(
-            r -> {
-              Thread thread = new Thread(r);
-              thread.setName("Event Bus Poller");
-              thread.setDaemon(true);
-              return thread;
-            });
+    this.socketPollingExecutor = Executors.newSingleThreadExecutor(
+        r -> {
+          Thread thread = new Thread(r);
+          thread.setName("Event Bus Poller");
+          thread.setDaemon(true);
+          return thread;
+        });
 
-    this.socketPublishingExecutor =
-        Executors.newSingleThreadExecutor(
-            r -> {
-              Thread thread = new Thread(r);
-              thread.setName("Event Bus Publisher");
-              thread.setDaemon(true);
-              return thread;
-            });
+    this.socketPublishingExecutor = Executors.newSingleThreadExecutor(
+        r -> {
+          Thread thread = new Thread(r);
+          thread.setName("Event Bus Publisher");
+          thread.setDaemon(true);
+          return thread;
+        });
 
-    this.listenerNotificationExecutor =
-        Executors.newFixedThreadPool(
-            Math.max(Runtime.getRuntime().availableProcessors() / 2, 2), // At least two threads
-            r -> {
-              Thread thread = new Thread(r);
-              thread.setName("Event Bus Listener Notifier");
-              thread.setDaemon(true);
-              return thread;
-            });
+    this.listenerNotificationExecutor = Executors.newFixedThreadPool(
+        Math.max(Runtime.getRuntime().availableProcessors() / 2, 2), // At least two threads
+        r -> {
+          Thread thread = new Thread(r);
+          thread.setName("Event Bus Listener Notifier");
+          thread.setDaemon(true);
+          return thread;
+        });
 
-    String connectionMessage =
-        String.format("Connecting to %s and %s", publishConnection, subscribeConnection);
+    String connectionMessage = String.format("Connecting to %s and %s", publishConnection, subscribeConnection);
     LOG.info(connectionMessage);
 
-    RetryPolicy<Object> retryPolicy =
-        RetryPolicy.builder()
-            .withMaxAttempts(5)
-            .withDelay(5, 10, ChronoUnit.SECONDS)
-            .onFailedAttempt(
-                e -> LOG.log(Level.WARNING, String.format("%s failed", connectionMessage)))
-            .onRetry(
-                e ->
-                    LOG.log(
-                        Level.WARNING,
-                        String.format("Failure #%s. Retrying.", e.getAttemptCount())))
-            .onRetriesExceeded(e -> LOG.log(Level.WARNING, "Connection aborted."))
-            .build();
+    RetryPolicy<Object> retryPolicy = RetryPolicy.builder()
+        .withMaxAttempts(5)
+        .withDelay(5, 10, ChronoUnit.SECONDS)
+        .onFailedAttempt(
+            e -> LOG.log(Level.WARNING, String.format("%s failed", connectionMessage)))
+        .onRetry(
+            e -> LOG.log(
+                Level.WARNING,
+                String.format("Failure #%s. Retrying.", e.getAttemptCount())))
+        .onRetriesExceeded(e -> LOG.log(Level.WARNING, "Connection aborted."))
+        .build();
 
     // Access to the zmq socket is safe here: no threads.
     Failsafe.with(retryPolicy)
@@ -159,12 +153,19 @@ class UnboundZmqEventBus implements EventBus {
     socketPolling = new PollingRunnable(secret);
     socketPollingExecutor.submit(socketPolling);
 
-    // Give ourselves up to a second to connect, using The World's Worst heuristic. If we don't
-    // manage to connect, it's not the end of the world, as the socket we're connecting to may not
+    // Give ourselves up to a second to connect, using The World's Worst heuristic.
+    // If we don't
+    // manage to connect, it's not the end of the world, as the socket we're
+    // connecting to may not
     // be up yet.
-    while (!pollingStarted.get()) {
+    // Optimized: Fast polling with safety timeout.
+    // - 10ms interval: responds as soon as poller is ready (typically 5-10ms)
+    // - 200ms max: safety net for edge cases
+    int maxWaitMs = 200;
+    int checkInterval = 10;
+    for (int waited = 0; waited < maxWaitMs && !pollingStarted.get(); waited += checkInterval) {
       try {
-        Thread.sleep(1000);
+        Thread.sleep(checkInterval);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         throw new RuntimeException(e);
@@ -201,8 +202,7 @@ class UnboundZmqEventBus implements EventBus {
   public void addListener(EventListener<?> listener) {
     Require.nonNull("Listener", listener);
 
-    List<Consumer<Event>> typeListeners =
-        listeners.computeIfAbsent(listener.getEventName(), t -> new LinkedList<>());
+    List<Consumer<Event>> typeListeners = listeners.computeIfAbsent(listener.getEventName(), t -> new LinkedList<>());
     typeListeners.add(listener);
   }
 
@@ -315,9 +315,8 @@ class UnboundZmqEventBus implements EventBus {
     }
 
     private void rejectEvent(EventName eventName, String data, String message) {
-      Event rejectedEvent =
-          new Event(REJECTED_EVENT, new ZeroMqEventBus.RejectedEvent(eventName, data));
-      LOG.log(Level.SEVERE, "{0}. {1}", new Object[] {message, rejectedEvent});
+      Event rejectedEvent = new Event(REJECTED_EVENT, new ZeroMqEventBus.RejectedEvent(eventName, data));
+      LOG.log(Level.SEVERE, "{0}. {1}", new Object[] { message, rejectedEvent });
 
       notifyListeners(REJECTED_EVENT, rejectedEvent);
     }
@@ -325,16 +324,15 @@ class UnboundZmqEventBus implements EventBus {
     private void notifyListeners(EventName eventName, Event event) {
       List<Consumer<Event>> eventListeners = listeners.getOrDefault(eventName, new ArrayList<>());
       eventListeners.forEach(
-          listener ->
-              listenerNotificationExecutor.submit(
-                  () -> {
-                    try {
-                      listener.accept(event);
-                    } catch (Exception e) {
-                      LOG.log(
-                          Level.WARNING, e, () -> "Caught exception from listener: " + listener);
-                    }
-                  }));
+          listener -> listenerNotificationExecutor.submit(
+              () -> {
+                try {
+                  listener.accept(event);
+                } catch (Exception e) {
+                  LOG.log(
+                      Level.WARNING, e, () -> "Caught exception from listener: " + listener);
+                }
+              }));
     }
   }
 }
